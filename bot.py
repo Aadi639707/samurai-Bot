@@ -1,16 +1,10 @@
-"""
-Main bot entry point.
-Handles startup and shutdown procedures, including database connections,
-scheduling tasks, and health checks.
-
-Author: Abraham (Priler)
-Github repo: https://github.com/Priler/samurai
-"""
-
 import asyncio
 import logging
 import sys
+import os
 from contextlib import suppress
+from flask import Flask
+from threading import Thread
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -25,6 +19,19 @@ from services.healthcheck import start_health_server, stop_health_server, get_he
 from services.cache import start_batch_flush_task, stop_batch_flush_task, flush_member_updates
 from services import ml_manager
 
+# --- RENDER PORT BINDING FIX ---
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "Samurai Bot is Alive!", 200
+
+def run_flask():
+    # Render automatically PORT env variable deta hai
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+# -------------------------------
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -33,101 +40,48 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global reference to scheduler task for cleanup
 _scheduler_task: asyncio.Task | None = None
 
-
 async def on_startup(bot: Bot) -> None:
-    """Startup hook."""
     global _scheduler_task
-    
     logger.info("Bot starting up...")
-
-    # Initialize database
     await init_db()
-    logger.info("Database connected")
-
-    # Start batch member update flush task (interval from config)
     start_batch_flush_task()
-    logger.info("Batch flush task started")
-
-    # Setup announcements
     set_announcements_bot(bot)
-    
-    # Start scheduler task
     _scheduler_task = asyncio.create_task(run_scheduler())
-    logger.info("Announcements scheduled")
-
-    # Start ML model auto-unload monitor
     ml_manager.start_monitor()
-
-    # Set health check to ready
     if config.healthcheck.enabled:
         get_health_server().set_ready(True)
-
-    logger.info(f"Bot version: {config.bot.version} ({config.bot.version_codename})")
-
+    logger.info(f"Bot version: {config.bot.version}")
 
 async def on_shutdown(bot: Bot) -> None:
-    """Shutdown hook."""
     global _scheduler_task
-    
     logger.info("Bot shutting down...")
-
-    # Set health check to not ready
     if config.healthcheck.enabled:
         get_health_server().set_ready(False)
-
-    # Stop ML model monitor
     ml_manager.stop_monitor()
-
-    # Cancel scheduler task
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
         with suppress(asyncio.CancelledError):
             await _scheduler_task
-        logger.info("Scheduler stopped")
-
-    # Stop batch flush task and flush remaining updates
     stop_batch_flush_task()
-    flushed = await flush_member_updates()
-    logger.info(f"Flushed {flushed} pending member updates")
-
-    # Close database
+    await flush_member_updates()
     await close_db()
-    logger.info("Database disconnected")
-    
-    # Stop health check server
     if config.healthcheck.enabled:
         await stop_health_server()
-        logger.info("Health check server stopped")
-
 
 async def main() -> None:
-    """Main function."""
-    # Check token
     if not config.bot.token.get_secret_value():
         logger.error("No bot token provided")
         sys.exit(1)
 
-    # Start health check server
-    if config.healthcheck.enabled:
-        await start_health_server(
-            host=config.healthcheck.host,
-            port=config.healthcheck.port
-        )
-
-    # Initialize bot and dispatcher
+    # Bot setup
     bot = Bot(
         token=config.bot.token.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = Dispatcher()
-
-    # Register handlers
     register_all_handlers(dp)
-
-    # Register middlewares
     register_all_middlewares(
         dp,
         default_locale=config.locale.default,
@@ -136,20 +90,18 @@ async def main() -> None:
         throttle_max_messages=config.throttling.max_messages,
         throttle_time_window=config.throttling.time_window
     )
-
-    # Setup startup/shutdown hooks
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
     logger.info("Bot started")
-
     try:
-        # Start polling (aiogram handles SIGINT/SIGTERM internally)
         await dp.start_polling(bot, skip_updates=True)
     finally:
-        # Close bot session
         await bot.session.close()
 
-
 if __name__ == "__main__":
+    # Web server ko background thread mein start karein
+    Thread(target=run_flask, daemon=True).start()
+    # Main bot loop start karein
     asyncio.run(main())
+    
