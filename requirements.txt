@@ -1,6 +1,10 @@
 # PyTorch CPU-only wheels (must be at top)
 --extra-index-url https://download.pytorch.org/whl/cpu
 
+# Web Server for Render (Added for Port Binding)
+flask
+gunicorn
+
 # Aiogram 3.x
 aiogram>=3.4.0
 
@@ -28,16 +32,8 @@ databases>=0.7.0
 aiosqlite>=0.19.0
 sqlalchemy>=1.4.42,<2.0.0
 
-# Optional: MySQL support
-# aiomysql
-# pymysql
-
 # ML models (spam/nsfw detection) - CPU only
 torch>=2.0.0
 transformers>=4.30.0
-# onnxruntime
 numpy>=1.24.0
 pillow>=10.0.0
-
-# HuggingFace (for model downloads)
-# hf_xet
